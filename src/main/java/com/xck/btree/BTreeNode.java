@@ -12,22 +12,34 @@ import java.util.List;
  * @Date 2021/5/21 17:05
  * @Created by xck503c
  */
-public class BTreeNode<K, V> implements Loggable, Serializable {
+public class BTreeNode implements Serializable {
 
-    private int nodeId;
+    private BTree bTree;
+
+    private int pageIndex;
 
     private boolean isWrite = false;
 
-    private List<Entry<K, V>> keys;
+    private List<Entry> keys;
 
     private List<Integer> childs; //child nodeId
 
-    private ComparatorLoggable<K> keyComparator;
+    private ComparatorLoggable keyComparator;
 
-    public BTreeNode(boolean isLeaf) {
-        this.keys = new ArrayList<Entry<K, V>>();
+    public BTreeNode(boolean isLeaf, BTree bTree) {
+        this.keys = new ArrayList<Entry>();
         this.childs = new ArrayList<Integer>();
         this.isLeaf = isLeaf;
+        this.bTree = bTree;
+        this.keyComparator = new ComparatorLoggable<byte[]>() {
+            public int compare(byte[] o1, byte[] o2) {
+                for (int i=0; i<o1.length; i++){
+                    if (o1[i] > o2[i]) return 1;
+                    if (o1[i] < o2[i]) return -1;
+                }
+                return 0;
+            }
+        };
     }
 
     /**
@@ -37,21 +49,19 @@ public class BTreeNode<K, V> implements Loggable, Serializable {
 
     /**
      * key-value，value is satellite information
-     * @param <K>
-     * @param <V>
      */
-    private static class Entry<K, V> implements Serializable{
-        private K key;
-        private V value;
+    private static class Entry implements Serializable{
+        private byte[] key;
+        private long value;
 
-        public Entry(K key, V value) {
+        public Entry(byte[] key, long value) {
             this.key = key;
             this.value = value;
         }
 
         @Override
         public String toString() {
-            return "<" + key + "-" +value + ">";
+            return "<" + key[key.length-2]+" "+key[key.length-1] + "-" +value + ">";
         }
     }
 
@@ -69,21 +79,21 @@ public class BTreeNode<K, V> implements Loggable, Serializable {
      * @param key
      * @return
      */
-    public SearchResult search(K key){
+    public SearchResult search(byte[] key){
         if (keys.isEmpty()){
             return new SearchResult(false, -1);
         }
 
         //find key
         for(int i=0; i<keys.size(); i++){
-            Entry<K, V> entry = keys.get(i);
+            Entry entry = keys.get(i);
             if(keyComparator.compare(key, entry.key) == 0){
                 return new SearchResult(true, i);
             }
         }
 
         for(int i=0; i<keys.size(); i++){
-            Entry<K, V> entry = keys.get(i);
+            Entry entry = keys.get(i);
             //search first entry.key >= key
             if(keyComparator.compare(key, entry.key) > 0) {
                 for (int j = i + 1; j < keys.size(); j++) {
@@ -107,10 +117,10 @@ public class BTreeNode<K, V> implements Loggable, Serializable {
      * @param key
      * @return child index
      */
-    public SearchResult searchInsertChild(K key){
+    public SearchResult searchInsertChild(byte[] key){
 
         for(int i=0; i<keys.size(); i++){
-            Entry<K, V> entry = keys.get(i);
+            Entry entry = keys.get(i);
             //search first entry.key >= key
             if(keyComparator.compare(key, entry.key) >= 0){
                 for (int j=i+1; j<keys.size(); j++){
@@ -130,34 +140,27 @@ public class BTreeNode<K, V> implements Loggable, Serializable {
         return new SearchResult(false, 0);
     }
 
-    public BTreeNode<K, V> splitRootNode(BTreeNode<K, V> newRoot, BTreeNode<K, V> newNode){
+    public BTreeNode splitRootNode(BTreeNode newRoot, BTreeNode newNode){
 
-        Entry<K, V> midKey = removeChildAndKey(this, newNode);
-
-        //root nodeId = 1
-        int newRootNodeId = newRoot.getNodeId();
-        newRoot.setNodeId(getNodeId());
-        setNodeId(newRootNodeId);
+        Entry midKey = removeChildAndKey(this, newNode);
 
         //right shift and up mid child
-        newRoot.childs.add(this.getNodeId());
-        newRoot.childs.add(newNode.getNodeId());
+        newRoot.childs.add(this.getPageIndex());
+        newRoot.childs.add(newNode.getPageIndex());
 
         //right shift and up mid key
         newRoot.keys.add(midKey);
 
-        writeToLog();
-        newRoot.writeToLog();
-        newNode.writeToLog();
+        write();
+        newRoot.write();
+        newNode.write();
 
         return newRoot;
     }
 
-    public void splitChildNode(int childIndex, BTreeNode<K, V> newNode){
-        Integer splitChildNodeId = childs.get(childIndex);
-        BTreeNode<K, V> splitChild = diskRead(splitChildNodeId);
+    public void splitChildNode(int childIndex, BTreeNode splitChild, BTreeNode newNode){
 
-        Entry<K, V> midKey = removeChildAndKey(splitChild, newNode);
+        Entry midKey = removeChildAndKey(splitChild, newNode);
 
         if (!isLeaf()) {
             //right shift and up mid child
@@ -165,7 +168,7 @@ public class BTreeNode<K, V> implements Loggable, Serializable {
             for (int i=this.childs.size()-2; i>=childIndex+1; i--){
                 this.childs.set(i+1, this.childs.get(i));
             }
-            this.childs.set(childIndex+1, newNode.getNodeId());
+            this.childs.set(childIndex+1, newNode.getPageIndex());
         }
 
         //right shift and up mid key
@@ -175,9 +178,9 @@ public class BTreeNode<K, V> implements Loggable, Serializable {
         }
         this.keys.set(childIndex, midKey);
 
-        newNode.writeToLog();
-        splitChild.writeToLog();
-        writeToLog();
+        newNode.write();
+        splitChild.write();
+        write();
     }
 
     /**
@@ -186,7 +189,7 @@ public class BTreeNode<K, V> implements Loggable, Serializable {
      * @param newNode
      * @return
      */
-    public Entry<K, V> removeChildAndKey(BTreeNode<K, V> splitOldNode, BTreeNode<K, V> newNode){
+    public Entry removeChildAndKey(BTreeNode splitOldNode, BTreeNode newNode){
         //remove t child
         List<Integer> childs = splitOldNode.childs;
         //full node is 2t childs
@@ -201,20 +204,19 @@ public class BTreeNode<K, V> implements Loggable, Serializable {
         }
 
         //remove t-1 key
-        List<Entry<K, V>> keys = splitOldNode.keys;
         //full node is 2t-1, so mid index is t, start remove is t+1
         //list is start 0, so mid is t-1, remove start is t
         //removeStart=(2t-1+1)/2
         //mid=(removeStart-1)
-        int removeStart = (keys.size()+1)/2;
-        for(int i=removeStart; i<keys.size(); i++){
-            newNode.keys.add(keys.get(i));
-            keys.set(i, null); //set remove tag
+        int removeStart = (splitOldNode.keys.size()+1)/2;
+        for(int i=removeStart; i<splitOldNode.keys.size(); i++){
+            newNode.keys.add(splitOldNode.keys.get(i));
+            splitOldNode.keys.set(i, null); //set remove tag
         }
-        clearNullInList(keys);
-        Entry<K, V> midKey = keys.get(removeStart-1);
-        keys.set(keys.size()-1, null);
-        clearNullInList(keys);
+        clearNullInList(splitOldNode.keys);
+        Entry midKey = splitOldNode.keys.get(removeStart-1);
+        splitOldNode.keys.set(splitOldNode.keys.size()-1, null);
+        clearNullInList(splitOldNode.keys);
 
         return midKey;
     }
@@ -231,14 +233,14 @@ public class BTreeNode<K, V> implements Loggable, Serializable {
         return childs.get(childIndex);
     }
 
-    public V getValue(int keyIndex){
+    public long getValue(int keyIndex){
         return keys.get(keyIndex).value;
     }
 
-    public void dirInsert(K key, V value){
+    public void dirInsert(byte[] key, long value){
         int insertIndex = keys.size();
         for(int i=0; i<keys.size(); i++){
-            Entry<K, V> entry = keys.get(i);
+            Entry entry = keys.get(i);
             //if key equals, inset rightmost
             if(keyComparator.compare(key, entry.key) >= 0){
                 //jump equals find key
@@ -253,9 +255,9 @@ public class BTreeNode<K, V> implements Loggable, Serializable {
                 insertIndex = i+1; //right
             }
         }
-        Entry<K, V> entry = new Entry<K, V>(key, value);
+        Entry entry = new Entry(key, value);
         if (keys.size() > 0) {
-            Entry<K, V> rightEntry = keys.get(keys.size()-1);
+            Entry rightEntry = keys.get(keys.size()-1);
             keys.add(rightEntry);
             for(int i=keys.size()-2; i>=insertIndex; i--){
                 //if new entry already exists, put left
@@ -267,100 +269,14 @@ public class BTreeNode<K, V> implements Loggable, Serializable {
             keys.add(entry);
         }
 
-        writeToLog();
-    }
-
-    public int logSize() {
-        int size = 0;
-
-        for(Integer nodeId : childs){
-            BTreeNode<K, V> node = new BTreeNode<K, V>(false);
-            node.setNodeId(nodeId);
-            node.readFromLog();
-            size += node.logSize();
-        }
-
-        try {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            ObjectOutputStream oos = new ObjectOutputStream(baos);
-            oos.writeObject(this);
-            size += baos.size();
-            return size;
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        return 0;
-    }
-
-    public void writeToLog() {
-
-        String homeDir = System.getProperty("user.dir") + "/db";
-        File file = new File(homeDir + "/" + nodeId);
-
-        if (!file.getParentFile().exists()){
-            file.getParentFile().mkdir();
-        }
-        if (file.exists()) file.delete();
-
-        FileOutputStream fos = null;
-        try {
-            fos = new FileOutputStream(file);
-            ObjectOutputStream oos = new ObjectOutputStream(fos);
-            oos.writeObject(this);
-            fos.flush();
-            isWrite = true;
-            keys = null;
-            childs = null;
-        } catch (IOException e) {
-            e.printStackTrace();
-        } finally {
-            try {
-                if (fos != null) {
-                    fos.close();
-                }
-            } catch (IOException e) {
-            }
-        }
-    }
-
-    public boolean readFromLog() {
-        String homeDir = System.getProperty("user.dir") + "/db";
-        File file = new File(homeDir + "/" + nodeId);
-
-        if (!file.exists()) return false;
-
-        if (!file.getParentFile().exists()){
-            file.getParentFile().mkdir();
-        }
-
-        FileInputStream fis = null;
-        try {
-            fis = new FileInputStream(file);
-            ObjectInputStream ois = new ObjectInputStream(fis);
-            BTreeNode<K, V> bTreeNode = (BTreeNode<K, V>) ois.readObject();
-            isWrite = false;
-            copy(bTreeNode);
-            return true;
-        } catch (IOException e) {
-            e.printStackTrace();
-        } catch (ClassNotFoundException e){
-            e.printStackTrace();
-        } finally {
-            try {
-                if (fis != null) {
-                    fis.close();
-                }
-            } catch (IOException e) {
-            }
-        }
-        return false;
+        write();
     }
 
     public boolean isWrite() {
         return isWrite;
     }
 
-    public void copy(BTreeNode<K, V> bTreeNode){
+    public void copy(BTreeNode bTreeNode){
         if (bTreeNode == null) return;
         this.keys = bTreeNode.keys;
         this.childs = bTreeNode.childs;
@@ -368,26 +284,19 @@ public class BTreeNode<K, V> implements Loggable, Serializable {
         this.keyComparator = bTreeNode.keyComparator;
     }
 
-    public void setNodeId(int nodeId) {
-        this.nodeId = nodeId;
-    }
 
-    public int getNodeId() {
-        return nodeId;
-    }
-
-    public ComparatorLoggable<K> getKeyComparator() {
+    public ComparatorLoggable getKeyComparator() {
         return keyComparator;
     }
 
-    public void setKeyComparator(ComparatorLoggable<K> keyComparator) {
+    public void setKeyComparator(ComparatorLoggable keyComparator) {
         this.keyComparator = keyComparator;
     }
 
-    private BTreeNode diskRead(Integer nodeId){
-        BTreeNode bTreeNode = new BTreeNode(false);
-        bTreeNode.setNodeId(nodeId);
-        boolean isReadSuc = bTreeNode.readFromLog();
+    private BTreeNode diskRead(Integer pageIndex){
+        BTreeNode bTreeNode = new BTreeNode(false, bTree);
+        bTreeNode.setPageIndex(pageIndex);
+        boolean isReadSuc = bTreeNode.read();
         if (!isReadSuc) return null;
 
         return bTreeNode;
@@ -395,30 +304,136 @@ public class BTreeNode<K, V> implements Loggable, Serializable {
 
     @Override
     public String toString() {
-        copy(diskRead(nodeId));
+        copy(diskRead(pageIndex));
 
         StringBuilder sb = new StringBuilder();
-        sb.append(nodeId).append("|");
+        sb.append(pageIndex).append("|");
         if (!this.isLeaf){
             int i=0;
             sb.append("<").append(childs.get(i++)).append(">");
-            for (Entry<K, V> entry : keys){
+            for (Entry entry : keys){
                 sb.append(entry).append("<").append(childs.get(i++)).append(">");
             }
             sb.append("\n");
-            for(Integer nodeId : childs){
-                BTreeNode<K, V> node = new BTreeNode<K, V>(false);
-                node.setNodeId(nodeId);
-                node.readFromLog();
+            for(Integer pageIndex : childs){
+                BTreeNode node = new BTreeNode(false, bTree);
+                node.setPageIndex(pageIndex);
+                node.read();
                 sb.append(node.toString());
             }
         }else {
-            for (Entry<K, V> entry : keys){
+            for (Entry entry : keys){
                 sb.append(entry).append("|");
             }
             sb.delete(sb.length()-1, sb.length());
             sb.append("\n");
         }
         return sb.toString();
+    }
+
+    public boolean read(){
+        RandomAccessFile randomAccessFile = bTree.getRandomAccessFile();
+        long pageStart = -1;
+        long childOffset = -1;
+        try {
+            //seek node page start
+            pageStart = pageIndex * bTree.getPageSize() + bTree.headerSize();
+            randomAccessFile.seek(pageStart);
+
+            this.isLeaf = randomAccessFile.readBoolean();
+            if (keys == null) keys = new ArrayList<Entry>();
+            //read key-value
+            int entrySize = randomAccessFile.readInt();
+            for (int i = 0; i < entrySize; i++) {
+                byte[] key = new byte[bTree.getKeySize()];
+                randomAccessFile.read(key);
+                keys.add(new Entry(key, randomAccessFile.readLong()));
+            }
+            //read child
+            if(!isLeaf){
+                //seek child start:
+                //1. entrySize = (t-1)*(keySize + valueSize)
+                //2. header = 5
+                if (childs == null) childs = new ArrayList<Integer>();
+                childOffset = pageStart + (2*bTree.getBranchingFactor()-1)*(bTree.getKeySize() + bTree.getValueSize()) + 5;
+                randomAccessFile.seek(childOffset);
+                for (int i = 0; i < entrySize+1; i++) {
+                    childs.add(randomAccessFile.readInt());
+                }
+            }
+            return true;
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+//            System.out.println("read page:" + pageIndex + ", pageStart=" + pageStart
+//                    + ", keys=" + keys
+//                    + ", childs=" + childs + ", childOffset=" + childOffset
+//                    + ", isLeaf=" + isLeaf);
+            isWrite = false;
+        }
+        return false;
+    }
+
+    public boolean write(){
+        RandomAccessFile randomAccessFile = bTree.getRandomAccessFile();
+        long pageStart = -1;
+        long childOffset = -1;
+        try {
+            //seek node page start
+            pageStart = pageIndex * bTree.getPageSize() + bTree.headerSize();
+            randomAccessFile.seek(pageStart);
+
+            randomAccessFile.writeBoolean(isLeaf);
+            randomAccessFile.writeInt(keys.size()); //entrySize
+            //read key-value
+            for (int i = 0; i < keys.size(); i++) {
+                Entry entry = keys.get(i);
+                if (bTree.getKeySize() - entry.key.length > 0){
+                    byte[] bytes = new byte[bTree.getKeySize() - entry.key.length];
+                    randomAccessFile.write(bytes);
+                }
+                randomAccessFile.write(entry.key);
+                randomAccessFile.writeLong(entry.value);
+            }
+            //read child
+            if(!isLeaf && childs.size() > 0){
+                childOffset = pageStart + (2*bTree.getBranchingFactor()-1)*(bTree.getKeySize() + bTree.getValueSize()) + 5;
+                randomAccessFile.seek(childOffset);
+                for (int i = 0; i < keys.size()+1; i++) {
+                    randomAccessFile.writeInt(childs.get(i));
+                }
+            }
+
+            return true;
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            isWrite = true;
+//            System.out.println("write page:" + pageIndex + ", pageStart=" + pageStart
+//                    + ", keys=" + keys
+//                    + ", childs=" + childs + ", childOffset=" + childOffset
+//                    + ", isLeaf=" + isLeaf);
+        }
+        return false;
+    }
+
+    public int getPageIndex() {
+        return pageIndex;
+    }
+
+    public void setPageIndex(int pageIndex) {
+        this.pageIndex = pageIndex;
+    }
+
+    public void setLeaf(boolean leaf) {
+        isLeaf = leaf;
+    }
+
+    public BTree getbTree() {
+        return bTree;
+    }
+
+    public void setbTree(BTree bTree) {
+        this.bTree = bTree;
     }
 }
