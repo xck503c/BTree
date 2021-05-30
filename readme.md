@@ -1,7 +1,7 @@
 # B Tree
 
 ## version change description
-###version 1.0.0
+### version 1.0.0
 
 date: 2021-05-23
 
@@ -13,7 +13,7 @@ no cache page:
 1. insert 1000 use 3555ms
 2. search 1000 use 712ms
 
-###version 1.1.0
+### version 1.1.0
 
 date: 2021-05-29
 
@@ -25,7 +25,7 @@ no cache page, branchingFactor=8, test once:
 1. insert 1000 use 10638ms
 2. search 1000 use 437ms
 
-###version 1.1.1
+### version 1.1.1
 
 date: 2021-05-30
 
