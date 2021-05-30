@@ -34,13 +34,12 @@ public class BTree {
 
     public BTree() {
         this.version = 2;
-        this.keySize = 256;
+        this.keySize = 128;
         this.valueSize = 8;
         this.usePages = 0;
         this.dataUsePages = 0;
         this.pageSize = 4096;
         this.branchingFactor = (pageSize+keySize+valueSize-5) / ((keySize + valueSize + 8)*2);
-
     }
 
     public void createTree() throws IOException{
@@ -64,8 +63,7 @@ public class BTree {
             }
             if (tmp.getName().endsWith("data")){
                 randomAccessDataFile = new RandomAccessFile(tmp , "rw");
-                randomAccessDataFile.skipBytes(4);
-                this.dataUsePages = randomAccessDataFile.readInt();
+                readDataFileHeader();
             }
         }
         if (!isFindRoot){
@@ -222,7 +220,7 @@ public class BTree {
      * read tree header and root node
      * @throws IOException
      */
-    public void read()  throws IOException {
+    public void read() throws IOException {
         randomAccessFile.seek(0);
 
         this.version = randomAccessFile.readInt();
@@ -245,14 +243,16 @@ public class BTree {
         root.setPageIndex(rootPageIndex);
         root.read();
 
-        randomAccessDataFile.seek(0);
-        randomAccessDataFile.skipBytes(4);
-        this.dataUsePages = randomAccessDataFile.readInt();
-        nodeDataPageIndexGenerator.set(dataUsePages);
-
 //        System.out.println("read tree, usePages=" + usePages
 //                + ", dataPages=" + dataUsePages
 //                + ", rootPageIndex=" + root.getPageIndex());
+    }
+
+    public void readDataFileHeader() throws IOException {
+        randomAccessDataFile.seek(0);
+        randomAccessDataFile.skipBytes(4);
+        dataUsePages = randomAccessDataFile.readInt();
+        nodeDataPageIndexGenerator.set(dataUsePages);
     }
 
     /**
@@ -289,7 +289,7 @@ public class BTree {
     public byte[] readData(long offset)  throws IOException {
         //cal startPagedataPageIndex
         int pageOffset = (int)(offset & 0xffffffff);
-        int dataPageIndex = (int)(offset >>> 16);
+        int dataPageIndex = (int)(offset >>> 32);
         int dataOffset = pageSize * dataPageIndex + 8 + pageOffset;
         //get real offset
         randomAccessDataFile.seek(dataOffset);
@@ -307,61 +307,35 @@ public class BTree {
      * @throws IOException
      */
     public long writeData(byte[] data)  throws IOException {
-        //if full, new data page
         int dataPageIndex = nodeDataPageIndexGenerator.get();
-        if (isCurDataPageFull(data.length)){
-            dataPageIndex = nodeDataPageIndexGenerator.incrementAndGet();
-        }
-
         int startPageOffset = pageSize * dataPageIndex + 8;
         randomAccessDataFile.seek(startPageOffset);
-        int dataTotalLen = 0;
-        int dataLen = 0;
-        try {
-            while ((dataLen = randomAccessDataFile.readInt()) != 0){
-                randomAccessDataFile.skipBytes(dataLen);
-                dataTotalLen+=4;
-                dataTotalLen+=dataLen;
-            }
-        } catch (EOFException e) {
-            //no data , readInt will throw EOFException
-        }
 
+        int tailOffset = 0;
+        try {
+            tailOffset = randomAccessDataFile.readInt();
+        } catch (EOFException e) {
+            //new page
+            tailOffset = 4;
+        }
+        //if full, new data page
+        if (pageSize - tailOffset < (4 + data.length)){
+            dataPageIndex = nodeDataPageIndexGenerator.incrementAndGet();
+            startPageOffset = pageSize * dataPageIndex + 8;
+            tailOffset = 4;
+        }
+        int dataOffset = tailOffset + 4 + data.length;
+        randomAccessDataFile.seek(startPageOffset);
+        randomAccessDataFile.writeInt(dataOffset);
+        randomAccessDataFile.seek(startPageOffset + tailOffset);
         randomAccessDataFile.writeInt(data.length);
         randomAccessDataFile.write(data);
 
         long value = 0L;
         value = value | dataPageIndex;
-        value = value << 16;
-        value = value | dataTotalLen;
+        value = value << 32;
+        value = value | tailOffset;
         return value;
-    }
-
-    /**
-     * is cur dataPage full?
-     * @param valueLen
-     * @return
-     * @throws IOException
-     */
-    public boolean isCurDataPageFull(int valueLen) throws IOException{
-        int curDataPageOffset = pageSize * nodeDataPageIndexGenerator.get() + 8;
-        randomAccessDataFile.seek(curDataPageOffset);
-        int dataTotalLen = 0;
-        int dataLen = 0;
-        try {
-            while ((dataLen = randomAccessDataFile.readInt()) != 0){
-                randomAccessDataFile.skipBytes(dataLen);
-                dataTotalLen+=dataLen;
-            }
-        } catch (IOException e) {
-            //no data throw
-            return false;
-        }
-        int curDataPageEndOffset = pageSize * (nodeDataPageIndexGenerator.get()+1);
-        if ((curDataPageEndOffset - dataTotalLen) < valueLen){
-            return false;
-        }
-        return true;
     }
 
     public void close() {
@@ -375,6 +349,7 @@ public class BTree {
                 randomAccessFile.getFD().sync();
                 randomAccessFile.close();
             } catch (IOException e) {
+                e.printStackTrace();
             }
         }
         if (randomAccessDataFile != null) {
@@ -382,6 +357,7 @@ public class BTree {
                 randomAccessDataFile.getFD().sync();
                 randomAccessDataFile.close();
             } catch (IOException e) {
+                e.printStackTrace();
             }
         }
     }
@@ -389,14 +365,6 @@ public class BTree {
     @Override
     public String toString() {
         return root.toString();
-    }
-
-    public int getVersion() {
-        return version;
-    }
-
-    public void setVersion(int version) {
-        this.version = version;
     }
 
     public int getPageSize() {
@@ -435,16 +403,8 @@ public class BTree {
         return branchingFactor;
     }
 
-    public void setBranchingFactor(int branchingFactor) {
-        this.branchingFactor = branchingFactor;
-    }
-
     public BTreeNode getRoot() {
         return root;
-    }
-
-    public void setRoot(BTreeNode root) {
-        this.root = root;
     }
 
     public RandomAccessFile getRandomAccessFile() {

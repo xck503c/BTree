@@ -26,11 +26,9 @@ public class InsertTest {
             for(int i=0; i<1000; i++){
                 try {
                     long start1 = System.currentTimeMillis();
-//                    byte[] key = new byte[]{((Integer)i).byteValue()};
                     byte[] key = (""+i).getBytes();
                     byte[] value = (""+num).getBytes();
                     bTree.insert(key, value);
-//                    System.out.println(bTree);
                     System.out.println("use:" + (System.currentTimeMillis()-start1));
                 } catch (Exception e) {
                     e.printStackTrace();
@@ -41,7 +39,7 @@ public class InsertTest {
         } catch (Exception e) {
             e.printStackTrace();
         } finally {
-//            System.out.println(bTree);
+            System.out.println(bTree);
             bTree.close();
         }
     }

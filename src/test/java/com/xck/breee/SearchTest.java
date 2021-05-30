@@ -23,17 +23,16 @@ public class SearchTest {
         long start = System.currentTimeMillis();
         for(int i=0; i<1000; i++){
             try {
-//                byte[] key = new byte[]{((Integer)i).byteValue()};
                 byte[] key = (""+i).getBytes();
                 String value = new String(bTree.search(key));
-//                System.out.println(i + " " + value);
+                System.out.println(i + " " + value);
             } catch (Exception e) {
                 e.printStackTrace();
                 System.out.println("exception: " + i);
                 break;
             }
         }
-//        System.out.println(bTree);
         System.out.println("useTime: " + (System.currentTimeMillis()-start));
+        System.out.println(bTree);
     }
 }
